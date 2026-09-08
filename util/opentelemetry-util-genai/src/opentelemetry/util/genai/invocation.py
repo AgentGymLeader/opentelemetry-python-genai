@@ -22,7 +22,6 @@ from opentelemetry.util.genai._embedding_invocation import EmbeddingInvocation
 from opentelemetry.util.genai._fetch_response_invocation import (
     FetchResponseInvocation,
 )
-from opentelemetry.util.genai._guardrail_invocation import GuardrailInvocation
 from opentelemetry.util.genai._inference_invocation import InferenceInvocation
 from opentelemetry.util.genai._invocation import (
     ContextToken,
@@ -40,7 +39,6 @@ __all__ = [
     "Error",
     "FetchResponseInvocation",
     "GenAIInvocation",
-    "GuardrailInvocation",
     "InferenceInvocation",
     "RetrievalInvocation",
     "ToolInvocation",

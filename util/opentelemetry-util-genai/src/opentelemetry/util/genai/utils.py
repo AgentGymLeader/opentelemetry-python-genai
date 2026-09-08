@@ -126,6 +126,16 @@ def should_emit_event() -> bool:
     )
 
 
+def should_emit_guardrail_result_event() -> bool:
+    """Return False only when event emission is explicitly disabled."""
+    return (
+        os.environ.get(OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT, "")
+        .lower()
+        .strip()
+        != "false"
+    )
+
+
 def should_capture_content_on_spans() -> bool:
     """Returns whether capture content is enabled on spans."""
     return get_content_capturing_mode() in (

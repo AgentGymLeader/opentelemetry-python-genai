@@ -7,7 +7,9 @@ import gc
 from typing import Any
 from unittest.mock import MagicMock
 
+import agents.tracing
 import pytest
+from agents.tracing import agent_span, guardrail_span, trace
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
@@ -20,6 +22,11 @@ from agents.tracing.span_data import (
 from opentelemetry.instrumentation.genai.openai_agents.processor import (
     GenAITracingProcessor,
 )
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -30,7 +37,9 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 from opentelemetry.util.genai.handler import TelemetryHandler
-from opentelemetry.util.genai.invocation import ToolInvocation
+from opentelemetry.util.genai.invocation import (
+    ToolInvocation,
+)
 
 
 class _Span:
@@ -90,28 +99,116 @@ def test_agent_span_creates_invoke_local_agent() -> None:
     ("triggered", "verdict"),
     [(False, "allow"), (True, "deny")],
 )
-def test_guardrail_span_creates_guardrail_invocation(
+def test_guardrail_span_emits_result_event(
     triggered: bool, verdict: str
 ) -> None:
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    log_exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
+    )
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+    )
     processor = GenAITracingProcessor(handler, provider="openai")
     span = _Span(GuardrailSpanData(name="content_filter", triggered=False))
 
-    processor.on_span_start(span)
-    span.span_data.triggered = triggered
-    processor.on_span_end(span)
+    with tracer_provider.get_tracer(__name__).start_as_current_span(
+        "enclosing"
+    ) as enclosing_span:
+        processor.on_span_start(span)
+        span.span_data.triggered = triggered
+        processor.on_span_end(span)
 
-    finished_span = span_exporter.get_finished_spans()[0]
-    assert finished_span.name == "run_guardrail content_filter"
-    assert finished_span.attributes == {
-        "gen_ai.operation.name": "run_guardrail",
+    (finished_span,) = span_exporter.get_finished_spans()
+    assert finished_span.name == "enclosing"
+
+    (readable_log,) = log_exporter.get_finished_logs()
+    log_record = readable_log.log_record
+    assert log_record.attributes == {
         "gen_ai.guardrail.component.name": "content_filter",
         "gen_ai.provider.name": "openai",
         "gen_ai.guardrail.verdict.type": verdict,
     }
+    assert log_record.trace_id == enclosing_span.get_span_context().trace_id
+    assert log_record.span_id == enclosing_span.get_span_context().span_id
+
+
+def test_guardrail_span_error_emits_result_event_without_verdict() -> None:
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    log_exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
+    )
+    handler = TelemetryHandler(
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+    )
+    processor = GenAITracingProcessor(handler, provider="openai")
+    span = _Span(GuardrailSpanData(name="content_filter", triggered=False))
+    span.error = {"message": "Error running guardrail", "data": {}}
+
+    with tracer_provider.get_tracer(__name__).start_as_current_span(
+        "enclosing"
+    ):
+        processor.on_span_start(span)
+        processor.on_span_end(span)
+
+    (finished_span,) = span_exporter.get_finished_spans()
+    assert finished_span.name == "enclosing"
+
+    (readable_log,) = log_exporter.get_finished_logs()
+    log_record = readable_log.log_record
+    assert log_record.attributes == {
+        "gen_ai.guardrail.component.name": "content_filter",
+        "gen_ai.provider.name": "openai",
+        "error.type": "_OTHER",
+    }
+
+
+def test_guardrail_event_uses_real_agent_span_as_parent() -> None:
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    log_exporter = InMemoryLogRecordExporter()
+    logger_provider = LoggerProvider()
+    logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
+    )
+    processor = GenAITracingProcessor(
+        TelemetryHandler(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+        ),
+        provider="openai",
+    )
+    trace_provider = agents.tracing.get_trace_provider()
+    multi = getattr(trace_provider, "_multi_processor", None)
+    previous_processors = list(getattr(multi, "_processors", ()))
+    try:
+        agents.tracing.set_trace_processors([processor])
+        with trace("workflow"):
+            with agent_span("triage"):
+                with guardrail_span("content_filter"):
+                    pass
+    finally:
+        agents.tracing.set_trace_processors(previous_processors)
+
+    agent_record = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes
+        and span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    )
+    (readable_log,) = log_exporter.get_finished_logs()
+    assert readable_log.log_record.span_id == agent_record.context.span_id
 
 
 def test_function_span_creates_tool_invocation_and_sets_provider_metric() -> (
@@ -372,24 +469,6 @@ def test_tool_span_error_sets_error_status_and_type(
     assert tool_span.status.status_code is StatusCode.ERROR
     assert tool_span.attributes is not None
     assert tool_span.attributes["error.type"] == "_OTHER"
-
-
-def test_guardrail_span_error_sets_error_status_and_type(
-    tracer_provider: TracerProvider,
-    span_exporter: InMemorySpanExporter,
-) -> None:
-    handler = TelemetryHandler(tracer_provider=tracer_provider)
-    processor = GenAITracingProcessor(handler, provider="openai")
-    span = _Span(GuardrailSpanData(name="content_filter", triggered=False))
-    span.error = {"message": "Error running guardrail", "data": {}}
-
-    processor.on_span_start(span)
-    processor.on_span_end(span)
-
-    (guardrail_span,) = span_exporter.get_finished_spans()
-    assert guardrail_span.status.status_code is StatusCode.ERROR
-    assert guardrail_span.attributes is not None
-    assert guardrail_span.attributes["error.type"] == "_OTHER"
 
 
 def test_agent_span_error_sets_error_status_and_type(

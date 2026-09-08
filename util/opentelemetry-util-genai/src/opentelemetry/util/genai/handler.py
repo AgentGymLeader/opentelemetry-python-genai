@@ -49,6 +49,9 @@ from opentelemetry.trace import (
     get_tracer,
 )
 from opentelemetry.util.genai._agent_invocation import AgentInvocation
+from opentelemetry.util.genai._guardrail_event import (
+    emit_guardrail_result,
+)
 from opentelemetry.util.genai._inference_invocation import LLMInvocation
 from opentelemetry.util.genai._invocation import Error
 from opentelemetry.util.genai.completion_hook import (
@@ -58,7 +61,6 @@ from opentelemetry.util.genai.completion_hook import (
 from opentelemetry.util.genai.invocation import (
     EmbeddingInvocation,
     FetchResponseInvocation,
-    GuardrailInvocation,
     InferenceInvocation,
     RetrievalInvocation,
     ToolInvocation,
@@ -436,32 +438,24 @@ class TelemetryHandler:
             tool_description=tool_description,
         )
 
-    def guardrail(
+    def guardrail_result(
         self,
         name: str,
-        *,
         provider: str,
-        target_type: str | None = None,
-    ) -> GuardrailInvocation:
-        """Returns a Guardrail invocation. Starts span when called.
-
-        Returned object can be used as a ContextManager which automatically calls `stop` or `fail`
-        to finalize the span upon exiting. If not used as a ContextManager, the caller is
-        responsible for calling `stop` or `fail` to finalize the span.
-
-        ``target_type`` is required by semconv-genai#427 and must be supplied
-        by instrumentations that know the guardrail direction.
-
-        Only set data attributes on the invocation object, do not modify the span or context.
+        *,
+        triggered: bool,
+        error_type: str | None = None,
+    ) -> None:
+        """Emit a one-shot result event, not an invocation with start/stop/fail;
+        the ``guardrail`` and ``GuardrailInvocation`` names are intentionally
+        left free for a future span-based remote guardrail.
         """
-        return GuardrailInvocation(
-            self._tracer,
-            self._metrics_recorder,
+        emit_guardrail_result(
             self._logger,
-            self._completion_hook,
             name,
-            provider=provider,
-            target_type=target_type,
+            provider,
+            triggered=triggered,
+            error_type=error_type,
         )
 
     def start_invoke_local_agent(

@@ -44,6 +44,7 @@ If not explicitly set, the default value is automatically determined by ``OTEL_I
 - When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` is set: defaults to ``true``
 
 If explicitly set, the user's value takes precedence over the default.
+Guardrail result events are not affected by this default: they are emitted whenever the variable is not explicitly false.
 
 When ``EVENT_ONLY`` or ``SPAN_AND_EVENT`` mode is enabled and a LoggerProvider is configured,
 the package also emits ``gen_ai.client.inference.operation.details`` events with structured

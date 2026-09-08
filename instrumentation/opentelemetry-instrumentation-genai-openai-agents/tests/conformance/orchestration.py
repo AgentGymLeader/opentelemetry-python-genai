@@ -22,7 +22,14 @@ import os
 from typing import Any
 from unittest import mock
 
-from agents import Agent, Runner, function_tool
+from agents import (
+    Agent,
+    GuardrailFunctionOutput,
+    RunContextWrapper,
+    Runner,
+    function_tool,
+    input_guardrail,
+)
 
 from opentelemetry.instrumentation.genai.openai_agents import (
     OpenAIAgentsInstrumentor,
@@ -47,6 +54,15 @@ def get_weather(city: str) -> str:
     return f"The forecast for {city} is sunny with a high of 24C."
 
 
+@input_guardrail(name="prompt_safety", run_in_parallel=False)
+def prompt_safety(
+    _context: RunContextWrapper[None],
+    _agent: Agent[Any],
+    _input: str | list[Any],
+) -> GuardrailFunctionOutput:
+    return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+
 def _build_triage_agent() -> Agent:
     weather_specialist = Agent(
         name="weather_specialist",
@@ -65,6 +81,7 @@ def _build_triage_agent() -> Agent:
             "hand off to weather_specialist. Otherwise answer briefly yourself."
         ),
         handoffs=[weather_specialist],
+        input_guardrails=[prompt_safety],
         model=DEFAULT_MODEL,
     )
 
@@ -80,6 +97,22 @@ class OrchestrationScenario(Scenario):
         "gen_ai.invoke_workflow.duration",
     )
     expected_violations = (
+        # semantic-conventions-genai#427 does not define this event yet. The
+        # placeholder event name and missing gen_ai.guardrail.target.type are
+        # gaps; until the event exists, Weaver reports its other attributes as
+        # missing too and cannot validate the required target type.
+        ExpectedViolation(
+            advice_id="missing_event",
+            message_substring="gen_ai.guardrail.result",
+        ),
+        ExpectedViolation(
+            advice_id="missing_attribute",
+            message_substring="gen_ai.guardrail.component.name",
+        ),
+        ExpectedViolation(
+            advice_id="missing_attribute",
+            message_substring="gen_ai.guardrail.verdict.type",
+        ),
         # `FunctionSpanData` in the openai-agents library doesn't expose
         # `tool_call_id`, so our `execute_tool` spans can't set
         # `gen_ai.tool.call.id`. Tracked in

@@ -1,1 +1,1 @@
-Add ``GuardrailInvocation`` for recording semantic-convention ``run_guardrail`` spans.
+Add support for emitting guardrail result events.
