@@ -100,6 +100,7 @@ async def test_async_embeddings_with_dimensions(
 async def test_async_embeddings_with_batch_input(
     span_exporter,
     metric_reader,
+    log_exporter,
     async_openai_client,
     instrument_with_content,
     vcr,
@@ -129,6 +130,14 @@ async def test_async_embeddings_with_batch_input(
         latest_experimental_enabled,
         response,
     )
+
+    # Content capture is enabled, but embeddings do not record input content
+    recorded = str(dict(spans[0].attributes))
+    for text in input_texts:
+        assert text not in recorded
+    assert "gen_ai.input.messages" not in spans[0].attributes
+    logs = log_exporter.get_finished_logs()
+    assert len(logs) == 0
 
     # Verify results contain the same number of embeddings as input texts
     assert len(response.data) == len(input_texts)
