@@ -13,10 +13,6 @@ Note: ``.env`` file configures additional environment variables:
 
 - ``OTEL_LOGS_EXPORTER=otlp`` to specify exporter type.
 
-Embeddings instrumentation does not currently record input content, so
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` has no effect in this
-example (see `#541 <https://github.com/open-telemetry/opentelemetry-python-genai/issues/541>`_).
-
 Setup
 -----
 
